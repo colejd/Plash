@@ -16,8 +16,34 @@
 	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>com.sindresorhus.Plash</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>plash</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>INIntentsSupported</key>
+	<array>
+		<string>AddWebsiteIntent</string>
+		<string>ReloadWebsiteIntent</string>
+		<string>NextWebsiteIntent</string>
+		<string>PreviousWebsiteIntent</string>
+		<string>RandomWebsiteIntent</string>
+		<string>ToggleBrowsingModeIntent</string>
+		<string>GetCurrentWebsiteIntent</string>
+		<string>GetWebsitesIntent</string>
+		<string>SetCurrentWebsiteIntent</string>
+		<string>RemoveWebsitesIntent</string>
+	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>LSApplicationCategoryType</key>
@@ -35,11 +61,18 @@
 	</dict>
 	<key>NSHumanReadableCopyright</key>
 	<string>MIT License © Sindre Sorhus</string>
-	<key>NSMainStoryboardFile</key>
-	<string>Main</string>
-	<key>NSPrincipalClass</key>
-	<string>NSApplication</string>
-	<key>NSSupportsSuddenTermination</key>
-	<true/>
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>AddWebsiteIntent</string>
+		<string>GetCurrentWebsiteIntent</string>
+		<string>GetWebsitesIntent</string>
+		<string>NextWebsiteIntent</string>
+		<string>PreviousWebsiteIntent</string>
+		<string>RandomWebsiteIntent</string>
+		<string>ReloadWebsiteIntent</string>
+		<string>RemoveWebsitesIntent</string>
+		<string>SetCurrentWebsiteIntent</string>
+		<string>ToggleBrowsingModeIntent</string>
+	</array>
 </dict>
 </plist>

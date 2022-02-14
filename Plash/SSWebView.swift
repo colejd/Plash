@@ -1,7 +1,11 @@
+import Combine
 import WebKit
 import Defaults
 
+@MainActor
 final class SSWebView: WKWebView {
+	private var cancellables = Set<AnyCancellable>()
+
 	private var excludedMenuItems: Set<MenuItemIdentifier> = [
 		.downloadImage,
 		.downloadLinkedFile,
@@ -11,6 +15,22 @@ final class SSWebView: WKWebView {
 		.toggleEnhancedFullScreen,
 		.toggleFullScreen
 	]
+
+	override init(frame: CGRect, configuration: WKWebViewConfiguration) {
+		super.init(frame: frame, configuration: configuration)
+
+		Defaults.publisher(.isBrowsingMode)
+			.receive(on: DispatchQueue.main)
+			.sink { [weak self] _ in
+				self?.toggleBrowsingModeClass()
+			}
+			.store(in: &cancellables)
+	}
+
+	@available(*, unavailable)
+	required init?(coder: NSCoder) {
+		fatalError("init(coder:) has not been implemented")
+	}
 
 	override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
 		for menuItem in menu.items {
@@ -58,15 +78,15 @@ final class SSWebView: WKWebView {
 
 		menu.addSeparator()
 
-		menu.addCallbackItem("Actual Size", isEnabled: zoomLevel != 1) { [weak self] _ in
+		menu.addCallbackItem("Actual Size", isEnabled: pageZoom != 1) { [weak self] in
 			self?.zoomLevelWrapper = 1
 		}
 
-		menu.addCallbackItem("Zoom In") { [weak self] _ in
+		menu.addCallbackItem("Zoom In") { [weak self] in
 			self?.zoomLevelWrapper += 0.2
 		}
 
-		menu.addCallbackItem("Zoom Out") { [weak self] _ in
+		menu.addCallbackItem("Zoom Out") { [weak self] in
 			self?.zoomLevelWrapper -= 0.2
 		}
 
@@ -76,13 +96,33 @@ final class SSWebView: WKWebView {
 			menu.items = menu.items.movingToEnd(menuItem)
 		}
 
+		if Defaults[.hideMenuBarIcon] {
+			menu.addSeparator()
+
+			menu.addCallbackItem("Show Menu Bar Icon") {
+				AppState.shared.handleMenuBarIcon()
+			}
+		}
+
 		// For the implicit “Services” menu.
 		menu.addSeparator()
+	}
+
+	func toggleBrowsingModeClass() {
+		let method = Defaults[.isBrowsingMode] ? "add" : "remove"
+		let code = "document.documentElement.classList.\(method)('plash-is-browsing-mode')"
+
+		evaluateJavaScript(code, in: nil, in: .defaultClient) { _ in }
+
+		// TODO: Use this when targeting macOS 12.
+//		let code = "document.documentElement.classList[method]('plash-is-browsing-mode')"
+//		Task {
+//			try? await callAsyncJavaScript("document.documentElement.classList[method]", arguments: ["method": method], contentWorld: .page)
+//		}
 	}
 }
 
 extension SSWebView {
-	// TODO: Use https://developer.apple.com/documentation/webkit/wkwebview/3516411-pagezoom instead when macOS 10.15.4 is out.
 	private var zoomLevelDefaultsKey: Defaults.Key<Double?>? {
 		guard let url = url?.normalized(removeFragment: true, removeQuery: true) else {
 			return nil
@@ -103,9 +143,9 @@ extension SSWebView {
 	}
 
 	var zoomLevelWrapper: Double {
-		get { zoomLevelDefaultsValue ?? zoomLevel }
+		get { zoomLevelDefaultsValue ?? pageZoom }
 		set {
-			zoomLevel = newValue
+			pageZoom = newValue
 
 			if let zoomDefaultsKey = zoomLevelDefaultsKey {
 				Defaults[zoomDefaultsKey] = newValue

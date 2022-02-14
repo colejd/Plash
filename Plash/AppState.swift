@@ -1,28 +1,29 @@
-import Cocoa
+import SwiftUI
 import Combine
-import AppCenter
-import AppCenterCrashes
+import Sentry
 import Defaults
 
-@NSApplicationMain
-final class AppDelegate: NSObject, NSApplicationDelegate {
+@MainActor
+final class AppState: ObservableObject {
+	static let shared = AppState()
+
 	var cancellables = Set<AnyCancellable>()
 
 	let menu = SSMenu()
 	let powerSourceWatcher = PowerSourceWatcher()
 
-	lazy var statusItem = with(NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)) {
+	private(set) lazy var statusItem = with(NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)) {
 		$0.isVisible = true
 		$0.behavior = [.removalAllowed, .terminationOnRemoval]
 		$0.menu = menu
 		$0.button?.image = Constants.menuBarIcon
 	}
 
-	lazy var statusItemButton = statusItem.button!
+	private(set) lazy var statusItemButton = statusItem.button!
 
-	lazy var webViewController = WebViewController()
+	private(set) lazy var webViewController = WebViewController()
 
-	lazy var desktopWindow = with(DesktopWindow(screen: Defaults[.display].screen)) {
+	private(set) lazy var desktopWindow = with(DesktopWindow(screen: Defaults[.display].screen)) {
 		$0.contentView = webViewController.webView
 		$0.contentView?.isHidden = true
 	}
@@ -30,13 +31,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	var isBrowsingMode = false {
 		didSet {
 			desktopWindow.isInteractive = isBrowsingMode
-			desktopWindow.alphaValue = isBrowsingMode ? 1 : CGFloat(Defaults[.opacity])
+			desktopWindow.alphaValue = isBrowsingMode ? 1 : Defaults[.opacity]
 			resetTimer()
 		}
 	}
 
 	var isEnabled = true {
 		didSet {
+			resetTimer()
 			statusItemButton.appearsDisabled = !isEnabled
 
 			if isEnabled {
@@ -45,10 +47,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 			} else {
 				// TODO: Properly unload the web view instead of just clearing and hiding it.
 				desktopWindow.orderOut(self)
-				loadURL(URL("about:blank"))
+				loadURL("about:blank")
 			}
 		}
 	}
+
+	var isScreenLocked = false
 
 	var reloadTimer: Timer?
 
@@ -59,8 +63,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 				statusItemButton.contentTintColor = .systemRed
 
 				// TODO: Also present the error when the user just added it from the input box as then it's also "interactive".
-				if isBrowsingMode {
-					NSApp.presentError(error)
+				if
+					isBrowsingMode,
+					!error.localizedDescription.contains("No internet connection")
+				{
+					error.presentAsModal()
 				}
 
 				return
@@ -70,44 +77,78 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		}
 	}
 
-	func applicationWillFinishLaunching(_ notification: Notification) {
+	init() {
+		setUpConfig()
+
+		DispatchQueue.main.async { [self] in
+			didLaunch()
+		}
+	}
+
+	private func didLaunch() {
+		// Make the invisible native SwitUI window not block access to the desktop. (macOS 12.0)
+		NSApp.windows.first?.ignoresMouseEvents = true
+
+		migrate()
+		_ = statusItemButton
+		_ = desktopWindow
+		setUpEvents()
+		showWelcomeScreenIfNeeded()
+		SSApp.requestReviewAfterBeingCalledThisManyTimes([5, 50, 500])
+
+		#if DEBUG
+//		SSApp.showSettingsWindow()
+//		WebsitesWindowController.showWindow()
+		#endif
+	}
+
+	private func setUpConfig() {
 		UserDefaults.standard.register(defaults: [
 			"NSApplicationCrashOnExceptions": true
 		])
+
+		#if !DEBUG
+		SentrySDK.start {
+			$0.dsn = "https://4ad446a4961b44ff8dc808a08379914e@o844094.ingest.sentry.io/6140750"
+			$0.enableSwizzling = false
+		}
+		#endif
+
+		// TODO: Remove in 2023.
+		SSApp.runOnce(identifier: "migrateToDefaultav5") {
+			Defaults.migrate(.websites, to: .v5)
+		}
 	}
 
-	func applicationDidFinishLaunching(_ notification: Notification) {
-		MSAppCenter.start(
-			"27131b3e-4b25-4a92-b0d3-7bb6883f7343",
-			withServices: [
-				MSCrashes.self
-			]
-		)
+	func handleMenuBarIcon() {
+		statusItem.isVisible = true
 
-		_ = statusItemButton
-		_ = desktopWindow
+		delay(seconds: 5) { [self] in
+			guard Defaults[.hideMenuBarIcon] else {
+				return
+			}
 
-		// This is needed to make the window appear.
-		// TODO: Find out why.
-		desktopWindow.isInteractive = false
+			statusItem.isVisible = false
+		}
+	}
 
-		setUpEvents()
-		showWelcomeScreenIfNeeded()
+	func handleAppReopen() {
+		handleMenuBarIcon()
 	}
 
 	func setEnabledStatus() {
-		isEnabled = !(Defaults[.deactivateOnBattery] && powerSourceWatcher?.powerSource.isUsingBattery == true)
+		isEnabled = !isScreenLocked && !(Defaults[.deactivateOnBattery] && powerSourceWatcher?.powerSource.isUsingBattery == true)
 	}
 
 	func resetTimer() {
 		reloadTimer?.invalidate()
 		reloadTimer = nil
 
-		guard !isBrowsingMode else {
-			return
-		}
-
-		guard let reloadInterval = Defaults[.reloadInterval] else {
+		guard
+			isEnabled,
+			!isBrowsingMode,
+			let reloadInterval = Defaults[.reloadInterval]
+		else {
 			return
 		}
 
@@ -126,8 +167,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		loadUserURL()
 	}
 
+	func reloadWebsite() {
+		loadUserURL()
+	}
+
 	func loadUserURL() {
-		loadURL(Defaults[.url])
+		loadURL(WebsitesController.shared.current?.url)
+	}
+
+	func toggleBrowsingMode() {
+		Defaults[.isBrowsingMode].toggle()
 	}
 
 	func loadURL(_ url: URL?) {
@@ -165,52 +214,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		}
 	}
 
-	func openLocalWebsite() {
-		NSApp.activate(ignoringOtherApps: true)
-
-		let panel = NSOpenPanel()
-		panel.canChooseFiles = false
-		panel.canChooseDirectories = true
-		panel.canCreateDirectories = false
-		panel.title = "Open Local Website"
-		panel.message = "Choose a directory with a “index.html” file."
-
-		// Ensure it's above the window when in "Browsing Mode".
-		panel.level = .floating
-
-		if
-			let url = Defaults[.url],
-			url.isFileURL
-		{
-			panel.directoryURL = url
-		}
-
-		panel.begin { [weak self] in
-			guard
-				let self = self,
-				$0 == .OK,
-				let url = panel.url
-			else {
-				return
-			}
-
-			guard url.appendingPathComponent("index.html", isDirectory: false).exists else {
-				NSAlert.showModal(message: "Please choose a directory that contains a “index.html” file.")
-				self.openLocalWebsite()
-				return
-			}
-
-			do {
-				try SecurityScopedBookmarkManager.saveBookmark(for: url)
-			} catch {
-				NSApp.presentError(error)
-				return
-			}
-
-			Defaults[.url] = url
-		}
-	}
-
 	/**
 	Replaces app-specific placeholder strings in the given URL with a corresponding value.
 	*/
@@ -224,5 +227,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		return try url
 			.replacingPlaceholder("[[screenWidth]]", with: String(format: "%.0f", screen.visibleFrameWithoutStatusBar.width))
 			.replacingPlaceholder("[[screenHeight]]", with: String(format: "%.0f", screen.visibleFrameWithoutStatusBar.height))
+	}
+}
+
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+	func applicationWillFinishLaunching(_ notification: Notification) {
+		// It's important that this is here so it's registered in time.
+		AppState.shared.setUpURLCommands()
+	}
+
+	// Does not work on macOS 12 because of `WindowGroup`: https://github.com/feedback-assistant/reports/issues/246
+	// This is only run when the app is started when it's already running.
+	func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+		AppState.shared.handleAppReopen()
+		return true
 	}
 }

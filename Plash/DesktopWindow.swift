@@ -1,6 +1,8 @@
 import Cocoa
 import Combine
+import Defaults
 
+@MainActor
 final class DesktopWindow: NSWindow {
 	override var canBecomeMain: Bool { isInteractive }
 	override var canBecomeKey: Bool { isInteractive }
@@ -17,7 +19,7 @@ final class DesktopWindow: NSWindow {
 	var isInteractive = false {
 		didSet {
 			if isInteractive {
-				level = .floating
+				level = Defaults[.bringBrowsingModeToFront] ? .floating : (.desktopIcon + 1) // The `+ 1` fixes a weird issue where the window is sometimes not interactive. (macOS 11.2.1)
 				makeKeyAndOrderFront(self)
 				ignoresMouseEvents = false
 			} else {
@@ -45,11 +47,16 @@ final class DesktopWindow: NSWindow {
 		self.isOpaque = false
 		self.backgroundColor = .clear
 		self.level = .desktop
+		self.isRestorable = false
+		self.canHide = false
+		self.displaysWhenScreenProfileChanges = true
 		self.collectionBehavior = [
 			.stationary,
-			.ignoresCycle
+			.ignoresCycle,
+			.fullScreenNone // This ensures that if Plash is launched while an app is fullscreen (fullscreen is a separate space), it will not show behind that app and instead show in the primary space.
 		]
 
+		disableSnapshotRestoration()
 		setFrame()
 
 		NSScreen.publisher
